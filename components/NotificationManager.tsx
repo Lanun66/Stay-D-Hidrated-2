@@ -28,8 +28,9 @@ const NotificationManager: React.FC<NotificationManagerProps> = ({ userId }) => 
 
             if (permission === 'granted') {
                 console.log('Izin notifikasi diberikan.');
-                // Ganti VAPID key jika Anda membuatnya di Firebase Console
-                const currentToken = await getToken(messaging, { vapidKey: 'YOUR_VAPID_KEY_FROM_FIREBASE' });
+                // PENTING: Ganti placeholder di bawah ini dengan VAPID key Anda.
+                // Anda bisa membuatnya di Firebase Console -> Project Settings -> Cloud Messaging -> Web configuration.
+                const currentToken = await getToken(messaging, { vapidKey: "REPLACE_WITH_YOUR_VAPID_KEY" });
 
                 if (currentToken) {
                     console.log('FCM Token:', currentToken);

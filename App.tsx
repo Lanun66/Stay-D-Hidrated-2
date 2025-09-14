@@ -6,6 +6,7 @@ import Confetti from './components/Confetti';
 import UserLinker from './components/UserLinker';
 import PartnerProgress from './components/PartnerProgress';
 import NotificationManager from './components/NotificationManager';
+import ConfigWarningBanner from './components/ConfigWarningBanner';
 
 const App: React.FC = () => {
   const {
@@ -14,6 +15,8 @@ const App: React.FC = () => {
     userId,
     isGoalReached,
     isLoading,
+    isOnlineMode,
+    configError,
     addWater,
     resetWater,
     linkPartner,
@@ -22,10 +25,10 @@ const App: React.FC = () => {
     sendNotificationToPartner,
   } = useFirestoreWaterTracker();
 
-  if (isLoading) {
+  if (isLoading && isOnlineMode) {
     return (
       <div className="min-h-screen w-full bg-gradient-to-br from-sky-400 via-blue-500 to-indigo-600 text-white flex flex-col items-center justify-center">
-        <h1 className="text-3xl font-bold">Memuat Data...</h1>
+        <h1 className="text-3xl font-bold">Menghubungkan ke Layanan...</h1>
       </div>
     );
   }
@@ -34,9 +37,12 @@ const App: React.FC = () => {
 
   return (
     <main className="relative min-h-screen w-full bg-gradient-to-br from-sky-400 via-blue-500 to-indigo-600 text-white flex flex-col items-center justify-center p-4 overflow-hidden">
-      <NotificationManager userId={userId} />
+      {configError && <ConfigWarningBanner message={configError} />}
+      {isOnlineMode && userId && <NotificationManager userId={userId} />}
+      
       {isGoalReached && <Confetti />}
-      <div className="text-center mb-8 z-10">
+
+      <div className="text-center mb-8 z-10 pt-16"> {/* Padding top for banner */}
         <h1 className="text-4xl font-bold tracking-tight">Hidrasi Harian</h1>
         <p className="text-lg text-blue-100 mt-2">Tetap sehat, tetap terhidrasi.</p>
       </div>
@@ -68,25 +74,27 @@ const App: React.FC = () => {
         </button>
       </div>
 
-      {partnerUserData && (
+      {isOnlineMode && partnerUserData && partnerId && (
         <div className="w-full max-w-sm z-10 mb-8">
             <PartnerProgress
-                name={partnerId ? `Pasangan (${partnerId.substring(0, 6)}...)` : 'Pasangan'}
+                name={`Pasangan (${partnerId.substring(0, 6)}...)`}
                 current={partnerUserData.currentAmount}
                 target={partnerUserData.targetAmount}
                 progress={partnerUserData.progressPercentage}
                 onSendNotification={sendNotificationToPartner}
-                partnerId={partnerId!}
+                partnerId={partnerId}
             />
         </div>
       )}
 
-      <UserLinker 
-        userId={userId} 
-        partnerId={partnerId} 
-        onLink={linkPartner} 
-        onUnlink={unlinkPartner} 
-      />
+      {isOnlineMode && (
+         <UserLinker 
+            userId={userId} 
+            partnerId={partnerId} 
+            onLink={linkPartner} 
+            onUnlink={unlinkPartner} 
+        />
+      )}
     </main>
   );
 };

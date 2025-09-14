@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { db, signIn, functions, httpsCallable } from '../firebase/config';
+import { db, signIn, functions, httpsCallable, isFirebaseConfigValid } from '../firebase/config';
 import { doc, setDoc, onSnapshot, serverTimestamp, DocumentData } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 
 const PARTNER_ID_KEY = 'waterTrackerPartnerId';
+const LOCAL_WATER_DATA_KEY = 'localWaterData';
 
 export interface UserWaterData {
     currentAmount: number;
@@ -20,53 +21,81 @@ const defaultUserData: UserWaterData = {
     lastUpdate: null,
 };
 
-const calculateProgress = (data: DocumentData | null | undefined): UserWaterData => {
-    if (!data) return defaultUserData;
-    const current = data.progress || 0;
-    const target = data.target || 2.5;
+const calculateProgress = (data: Partial<UserWaterData> | DocumentData | null | undefined): UserWaterData => {
+    const current = data?.currentAmount ?? data?.progress ?? 0;
+    const target = data?.targetAmount ?? data?.target ?? 2.5;
     const progress = target > 0 ? Math.min((current / target) * 100, 100) : 0;
     return {
         currentAmount: current,
         targetAmount: target,
         progressPercentage: progress,
-        lastUpdate: data.lastUpdate,
-        name: data.name || 'Pengguna',
+        lastUpdate: data?.lastUpdate,
+        name: data?.name || 'Pengguna',
     };
 };
 
 export const useFirestoreWaterTracker = () => {
     const [isLoading, setIsLoading] = useState(true);
+    const [isOnlineMode, setIsOnlineMode] = useState(false);
+    const [configError, setConfigError] = useState<string | null>(null);
+
     const [user, setUser] = useState<User | null>(null);
     const [currentUserData, setCurrentUserData] = useState<UserWaterData>(defaultUserData);
     const [partnerUserData, setPartnerUserData] = useState<UserWaterData | null>(null);
-    const [partnerId, setPartnerId] = useState<string | null>(localStorage.getItem(PARTNER_ID_KEY));
+    const [partnerId, setPartnerId] = useState<string | null>(null);
 
-    // Sign in user anonymously
+    // Mode Initialization
     useEffect(() => {
-        const authenticate = async () => {
-            const signedInUser = await signIn();
-            if(signedInUser) {
-                setUser(signedInUser);
-            } else {
-                // Handle auth error
-                setIsLoading(false);
+        if (isFirebaseConfigValid()) {
+            setIsOnlineMode(true);
+            const authenticate = async () => {
+                try {
+                    const signedInUser = await signIn();
+                    setUser(signedInUser);
+                } catch (e) {
+                    console.error("Firebase Authentication failed:", e);
+                    setIsOnlineMode(false); // Fallback to offline mode
+                    setConfigError("Gagal terhubung ke Firebase. Periksa kredensial dan koneksi Anda.");
+                }
+            };
+            authenticate();
+        } else {
+            setIsOnlineMode(false);
+            setConfigError("Mode offline: Konfigurasi Firebase untuk mengaktifkan sinkronisasi pasangan.");
+            // Load local data
+            const savedData = localStorage.getItem(LOCAL_WATER_DATA_KEY);
+            if (savedData) {
+                setCurrentUserData(calculateProgress(JSON.parse(savedData)));
             }
-        };
-        authenticate();
+            // Load partner ID for display purposes, even if offline
+            setPartnerId(localStorage.getItem(PARTNER_ID_KEY));
+            setIsLoading(false);
+        }
     }, []);
 
-    // Firestore listener for current user
+    // Local Mode: Save to localStorage
     useEffect(() => {
-        if (!user) return;
+        if (!isOnlineMode) {
+            localStorage.setItem(LOCAL_WATER_DATA_KEY, JSON.stringify({
+                currentAmount: currentUserData.currentAmount,
+                targetAmount: currentUserData.targetAmount,
+            }));
+        }
+    }, [currentUserData, isOnlineMode]);
 
-        setIsLoading(true);
+
+    // Online Mode: Firestore listener for current user
+    useEffect(() => {
+        if (!isOnlineMode || !user) {
+             if (isOnlineMode) setIsLoading(false);
+            return;
+        }
+
         const userRef = doc(db, 'users', user.uid);
-
         const unsubscribe = onSnapshot(userRef, (docSnap) => {
             if (docSnap.exists()) {
                 setCurrentUserData(calculateProgress(docSnap.data()));
             } else {
-                // Create user document if it doesn't exist
                 setDoc(userRef, { 
                     name: `Pengguna ${user.uid.substring(0, 5)}`,
                     progress: 0, 
@@ -75,50 +104,62 @@ export const useFirestoreWaterTracker = () => {
                 });
             }
             setIsLoading(false);
+        }, (err) => {
+            console.error("Firestore snapshot error:", err);
+            setIsLoading(false);
         });
 
         return () => unsubscribe();
-    }, [user]);
+    }, [isOnlineMode, user]);
 
-    // Firestore listener for partner
+     // Online Mode: Load partner and listen for changes
     useEffect(() => {
-        if (!partnerId) {
+        if (isOnlineMode) {
+             setPartnerId(localStorage.getItem(PARTNER_ID_KEY));
+        }
+    }, [isOnlineMode]);
+
+    // Online Mode: Firestore listener for partner
+    useEffect(() => {
+        if (!isOnlineMode || !partnerId) {
             setPartnerUserData(null);
             return;
-        };
+        }
 
         const partnerRef = doc(db, 'users', partnerId);
         const unsubscribe = onSnapshot(partnerRef, (docSnap) => {
-            if (docSnap.exists()) {
-                setPartnerUserData(calculateProgress(docSnap.data()));
-            } else {
-                setPartnerUserData(null); // Partner ID might be invalid
-            }
+            setPartnerUserData(docSnap.exists() ? calculateProgress(docSnap.data()) : null);
         });
 
         return () => unsubscribe();
-    }, [partnerId]);
+    }, [isOnlineMode, partnerId]);
     
-    const updateFirestoreProgress = useCallback(async (newAmount: number) => {
-        if (!user) return;
-        const userRef = doc(db, 'users', user.uid);
-        await setDoc(userRef, { 
-            progress: Math.max(0, newAmount),
-            target: currentUserData.targetAmount,
-            lastUpdate: serverTimestamp() 
-        }, { merge: true });
-    }, [user, currentUserData.targetAmount]);
+    // --- Actions ---
 
     const addWater = useCallback(() => {
         const newAmount = currentUserData.currentAmount + 0.25;
-        updateFirestoreProgress(newAmount);
-    }, [currentUserData.currentAmount, updateFirestoreProgress]);
+        if (isOnlineMode && user) {
+            const userRef = doc(db, 'users', user.uid);
+            setDoc(userRef, { progress: newAmount }, { merge: true });
+        } else {
+            setCurrentUserData(prev => calculateProgress({ ...prev, currentAmount: newAmount }));
+        }
+    }, [currentUserData, isOnlineMode, user]);
 
     const resetWater = useCallback(() => {
-        updateFirestoreProgress(0);
-    }, [updateFirestoreProgress]);
+        if (isOnlineMode && user) {
+            const userRef = doc(db, 'users', user.uid);
+            setDoc(userRef, { progress: 0 }, { merge: true });
+        } else {
+            setCurrentUserData(prev => calculateProgress({ ...prev, currentAmount: 0 }));
+        }
+    }, [isOnlineMode, user]);
     
     const linkPartner = useCallback((id: string) => {
+        if (!isOnlineMode) {
+            alert("Fitur ini memerlukan koneksi ke Firebase. Silakan konfigurasikan kredensial Anda.");
+            return;
+        }
         const trimmedId = id.trim();
         if (trimmedId && trimmedId !== user?.uid) {
             localStorage.setItem(PARTNER_ID_KEY, trimmedId);
@@ -126,7 +167,7 @@ export const useFirestoreWaterTracker = () => {
         } else {
             alert("ID Pasangan tidak valid atau sama dengan ID Anda.");
         }
-    }, [user]);
+    }, [isOnlineMode, user]);
 
     const unlinkPartner = useCallback(() => {
         localStorage.removeItem(PARTNER_ID_KEY);
@@ -137,79 +178,14 @@ export const useFirestoreWaterTracker = () => {
         type: 'encouragement' | 'reminder',
         partnerData: { id: string; current: number; target: number }
     ) => {
+        if (!isOnlineMode) {
+            alert("Fitur ini memerlukan koneksi ke Firebase.");
+            return;
+        }
         if (!partnerData.id) {
             alert("Tidak ada pasangan terhubung.");
             return;
         }
-
-        /*
-        * PENTING: Kode ini memanggil Cloud Function bernama 'sendNotification'.
-        * Anda HARUS men-deploy fungsi ini ke proyek Firebase Anda.
-        *
-        * Berikut adalah contoh implementasi Cloud Function (index.ts):
-        *
-        * const functions = require("firebase-functions");
-        * const admin = require("firebase-admin");
-        * admin.initializeApp();
-        *
-        * exports.sendNotification = functions.https.onCall(async (data, context) => {
-        *   if (!context.auth) {
-        *     throw new functions.https.HttpsError("unauthenticated", "Fungsi ini harus dipanggil saat masuk.");
-        *   }
-        *
-        *   const senderUid = context.auth.uid;
-        *   const recipientUid = data.recipientUid;
-        *   const type = data.type;
-        *
-        *   // Dapatkan data pengirim dan penerima dari Firestore
-        *   const db = admin.firestore();
-        *   const senderDoc = await db.collection("users").doc(senderUid).get();
-        *   const recipientDoc = await db.collection("users").doc(recipientUid).get();
-        *
-        *   if (!recipientDoc.exists || !senderDoc.exists) {
-        *     throw new functions.https.HttpsError("not-found", "Pengguna tidak ditemukan.");
-        *   }
-        *
-        *   const senderName = senderDoc.data().name || "Pasanganmu";
-        *   const recipientToken = recipientDoc.data().fcmToken;
-        *
-        *   if (!recipientToken) {
-        *     console.log("Penerima tidak memiliki FCM token.");
-        *     return { success: false, reason: "No FCM token" };
-        *   }
-        *
-        *   let title = "";
-        *   let body = "";
-        *
-        *   if (type === "encouragement") {
-        *     title = "Kamu dapat semangat baru! 🎉";
-        *     body = `${senderName} kasih semangat! Ayo lanjut minum 💧`;
-        *   } else if (type === "reminder") {
-        *     title = "Pengingat Minum 💧";
-        *     const current = data.partnerCurrent;
-        *     const target = data.partnerTarget;
-        *     body = `Hei, jangan lupa minum, progress kamu baru ${current.toFixed(2)}L dari target ${target.toFixed(1)}L.`;
-        *   } else {
-        *      return { success: false, reason: "Invalid type" };
-        *   }
-        *
-        *   const payload = {
-        *     notification: { title, body, icon: "/vite.svg" },
-        *     token: recipientToken,
-        *     webpush: { fcmOptions: { link: "/" } },
-        *   };
-        *
-        *   try {
-        *     await admin.messaging().send(payload);
-        *     console.log("Notifikasi berhasil dikirim.");
-        *     return { success: true };
-        *   } catch (error) {
-        *     console.error("Gagal mengirim notifikasi:", error);
-        *     throw new functions.https.HttpsError("internal", "Gagal mengirim notifikasi.");
-        *   }
-        * });
-        */
-
         try {
             const sendNotification = httpsCallable(functions, 'sendNotification');
             await sendNotification({
@@ -221,10 +197,9 @@ export const useFirestoreWaterTracker = () => {
             alert('Notifikasi berhasil dikirim!');
         } catch (error) {
             console.error('Gagal mengirim notifikasi:', error);
-            alert('Gagal mengirim notifikasi. Pastikan Cloud Function sudah di-deploy dan Anda memiliki koneksi internet.');
+            alert('Gagal mengirim notifikasi. Pastikan Cloud Function sudah di-deploy.');
         }
-    }, []);
-
+    }, [isOnlineMode]);
 
     return {
         currentUserData,
@@ -233,6 +208,8 @@ export const useFirestoreWaterTracker = () => {
         partnerId,
         isGoalReached: currentUserData.progressPercentage >= 100,
         isLoading,
+        isOnlineMode,
+        configError,
         addWater,
         resetWater,
         linkPartner,

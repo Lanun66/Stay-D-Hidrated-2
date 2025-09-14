@@ -4,14 +4,21 @@ import { getFirestore } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { getMessaging } from "firebase/messaging";
 
-// TODO: Ganti dengan konfigurasi proyek Firebase Anda
+// PENTING: Ganti nilai-nilai placeholder di bawah ini dengan kredensial
+// dari proyek Firebase Anda. Anda bisa menemukannya di
+// Project Settings > General di Firebase Console.
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_AUTH_DOMAIN",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_STORAGE_BUCKET",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "REPLACE_WITH_YOUR_API_KEY",
+  authDomain: "REPLACE_WITH_YOUR_AUTH_DOMAIN",
+  projectId: "REPLACE_WITH_YOUR_PROJECT_ID",
+  storageBucket: "REPLACE_WITH_YOUR_STORAGE_BUCKET",
+  messagingSenderId: "REPLACE_WITH_YOUR_MESSAGING_SENDER_ID",
+  appId: "REPLACE_WITH_YOUR_APP_ID"
+};
+
+// Fungsi untuk memeriksa apakah konfigurasi Firebase valid
+export const isFirebaseConfigValid = () => {
+    return !Object.values(firebaseConfig).some(value => value.startsWith('REPLACE_WITH_YOUR'));
 };
 
 // Inisialisasi Firebase
@@ -21,7 +28,6 @@ const db = getFirestore(app);
 const functions = getFunctions(app);
 const messaging = getMessaging(app);
 
-
 // Fungsi untuk masuk secara anonim
 export const signIn = async () => {
     try {
@@ -29,7 +35,8 @@ export const signIn = async () => {
         return userCredential.user;
     } catch (error) {
         console.error("Error signing in anonymously:", error);
-        return null;
+        // Lemparkan galat agar dapat ditangkap oleh pemanggil
+        throw error;
     }
 };
 
