@@ -20,7 +20,8 @@ function App() {
         history,
         isLoading,
         error,
-        isOffline, // Flag to indicate offline mode
+        isOffline,
+        configError, // Specific error for configuration issues
         updateWater,
         updateTarget,
         linkPartner,
@@ -58,7 +59,6 @@ function App() {
         );
     }
     
-    // This error screen is now only for unexpected online errors, not config issues.
     if (error) {
         return (
             <div className="w-screen h-screen flex flex-col items-center justify-center bg-gradient-to-br from-red-400 to-red-600 text-white font-sans p-4 text-center">
@@ -70,7 +70,7 @@ function App() {
 
     return (
         <div className="w-screen min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 bg-gradient-to-br from-blue-400 to-blue-600 text-white font-sans overflow-y-auto">
-            {isOffline && <ConfigWarningBanner />}
+            {isOffline && <ConfigWarningBanner message={configError} />}
             {!isOffline && <NotificationManager userId={userId} />}
             {showConfetti && <Confetti />}
 

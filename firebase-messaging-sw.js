@@ -2,15 +2,15 @@
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js');
 
-// PENTING: Ganti nilai-nilai placeholder di bawah ini dengan kredensial
-// dari proyek Firebase Anda. Ini harus sama dengan yang ada di firebase/config.ts
+// Konfigurasi Firebase yang valid, disamakan dengan firebase/config.ts
 const firebaseConfig = {
-  apiKey: "REPLACE_WITH_YOUR_API_KEY",
-  authDomain: "REPLACE_WITH_YOUR_AUTH_DOMAIN",
-  projectId: "REPLACE_WITH_YOUR_PROJECT_ID",
-  storageBucket: "REPLACE_WITH_YOUR_STORAGE_BUCKET",
-  messagingSenderId: "REPLACE_WITH_YOUR_MESSAGING_SENDER_ID",
-  appId: "REPLACE_WITH_YOUR_APP_ID"
+  apiKey: "AIzaSyBoYkS07i48_TTc2dBJq8xKpkj-cC7dq8M",
+  authDomain: "stay-d-hidrated-2.firebaseapp.com",
+  projectId: "stay-d-hidrated-2",
+  storageBucket: "stay-d-hidrated-2.appspot.com",
+  messagingSenderId: "938308592276",
+  appId: "1:938308592276:web:39b3b9624387136ffdca81",
+  measurementId: "G-ZLXV7W9L23"
 };
 
 firebase.initializeApp(firebaseConfig);

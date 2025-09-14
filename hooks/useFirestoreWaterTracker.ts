@@ -38,7 +38,8 @@ const getTodayDateString = () => {
 };
 
 export const useFirestoreWaterTracker = () => {
-    const isOffline = !isFirebaseConfigValid();
+    const initialIsOffline = !isFirebaseConfigValid();
+    const [isOffline, setIsOffline] = useState(initialIsOffline);
     const [userId, setUserId] = useState<string | null>(null);
     const [waterData, setWaterData] = useState<WaterData>({
         current: 0,
@@ -50,75 +51,86 @@ export const useFirestoreWaterTracker = () => {
     const [partnerData, setPartnerData] = useState<PartnerData | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [configError, setConfigError] = useState<string | null>(null);
+
+    const initializeOfflineMode = useCallback(() => {
+        console.log("Aplikasi berjalan dalam mode offline.");
+        const savedData = localStorage.getItem('hydroHomieData');
+        const todayStr = getTodayDateString();
+        let data: LocalStorageData;
+
+        if (savedData) {
+            data = JSON.parse(savedData);
+            const lastHistoryEntry = data.history.length > 0 ? data.history[data.history.length - 1] : null;
+            if (lastHistoryEntry && lastHistoryEntry.date !== todayStr) {
+                data.current = 0; // Reset for a new day
+            }
+        } else {
+            data = { current: 0, target: 2.0, history: [] };
+        }
+        setWaterData({ ...data, lastUpdated: Timestamp.now(), partnerId: null });
+    }, []);
 
     useEffect(() => {
         const initialize = async () => {
             setIsLoading(true);
-            setError(null);
 
-            if (isOffline) {
-                // --- OFFLINE MODE ---
-                console.log("Aplikasi berjalan dalam mode offline.");
-                const savedData = localStorage.getItem('hydroHomieData');
-                const todayStr = getTodayDateString();
-                let data: LocalStorageData;
+            if (initialIsOffline) {
+                initializeOfflineMode();
+                setIsLoading(false);
+                return;
+            }
 
-                if (savedData) {
-                    data = JSON.parse(savedData);
-                    const lastHistoryEntry = data.history[data.history.length - 1];
-                    if (lastHistoryEntry && lastHistoryEntry.date !== todayStr) {
-                        data.current = 0; // Reset for a new day
+            // Try online mode
+            try {
+                await signIn();
+                const currentUser = auth.currentUser;
+                if (!currentUser) throw new Error("Gagal mengautentikasi pengguna.");
+                
+                setUserId(currentUser.uid);
+
+                const userRef = doc(db, 'users', currentUser.uid);
+                const userSnap = await getDoc(userRef);
+                
+                if (userSnap.exists()) {
+                    const data = userSnap.data() as Omit<WaterData, 'history'> & { history?: WaterData['history'] };
+                    const todayStr = getTodayDateString();
+                    const lastUpdatedDate = data.lastUpdated.toDate().toISOString().split('T')[0];
+                    
+                    if (lastUpdatedDate !== todayStr) {
+                         const updatedData = { ...data, current: 0, lastUpdated: Timestamp.now() };
+                        setWaterData({ ...updatedData, history: data.history || [] });
+                        await updateDoc(userRef, { current: 0, lastUpdated: Timestamp.now() });
+                    } else {
+                         setWaterData({
+                            current: data.current,
+                            target: data.target,
+                            lastUpdated: data.lastUpdated,
+                            partnerId: data.partnerId || null,
+                            history: data.history || [],
+                        });
                     }
                 } else {
-                    data = { current: 0, target: 2.0, history: [] };
+                    const newUserData: WaterData = { current: 0, target: 2.0, lastUpdated: Timestamp.now(), partnerId: null, history: [] };
+                    await setDoc(userRef, newUserData);
+                    setWaterData(newUserData);
                 }
-                setWaterData({ ...data, lastUpdated: Timestamp.now(), partnerId: null });
-                setIsLoading(false);
-            } else {
-                // --- ONLINE MODE ---
-                try {
-                    await signIn();
-                    const currentUser = auth.currentUser;
-                    if (!currentUser) throw new Error("Gagal mengautentikasi pengguna.");
-                    
-                    setUserId(currentUser.uid);
-
-                    const userRef = doc(db, 'users', currentUser.uid);
-                    const userSnap = await getDoc(userRef);
-                    
-                    if (userSnap.exists()) {
-                        const data = userSnap.data() as Omit<WaterData, 'history'> & { history?: WaterData['history'] };
-                        const todayStr = getTodayDateString();
-                        const lastUpdatedDate = data.lastUpdated.toDate().toISOString().split('T')[0];
-                        
-                        if (lastUpdatedDate !== todayStr) {
-                             const updatedData = { ...data, current: 0, lastUpdated: Timestamp.now() };
-                            setWaterData({ ...updatedData, history: data.history || [] });
-                            await updateDoc(userRef, { current: 0, lastUpdated: Timestamp.now() });
-                        } else {
-                             setWaterData({
-                                current: data.current,
-                                target: data.target,
-                                lastUpdated: data.lastUpdated,
-                                partnerId: data.partnerId || null,
-                                history: data.history || [],
-                            });
-                        }
-                    } else {
-                        const newUserData: WaterData = { current: 0, target: 2.0, lastUpdated: Timestamp.now(), partnerId: null, history: [] };
-                        await setDoc(userRef, newUserData);
-                        setWaterData(newUserData);
-                    }
-                } catch (err: any) {
-                    console.error("Initialization Error:", err);
+            } catch (err: any) {
+                console.error("Initialization Error:", err);
+                if (err.code === 'auth/configuration-not-found') {
+                    console.warn("Kesalahan konfigurasi Firebase terdeteksi. Beralih ke mode offline.");
+                    setConfigError("Koneksi gagal. Pastikan 'Anonymous Authentication' telah diaktifkan di Firebase Console Anda.");
+                    setIsOffline(true);
+                    initializeOfflineMode();
+                } else {
                     setError("Gagal terhubung ke Firebase. Periksa koneksi dan konfigurasi Anda.");
-                } finally {
-                    setIsLoading(false);
                 }
+            } finally {
+                setIsLoading(false);
             }
         };
         initialize();
-    }, [isOffline]);
+    }, [initialIsOffline, initializeOfflineMode]);
 
     useEffect(() => {
         if (isOffline || !waterData.partnerId) {
@@ -193,5 +205,5 @@ export const useFirestoreWaterTracker = () => {
         alert(`Pesan terkirim!`);
     }, [isOffline, userId]);
 
-    return { ...waterData, userId, partnerData, isLoading, error, isOffline, updateWater, updateTarget, linkPartner, unlinkPartner, sendNotificationToPartner };
+    return { ...waterData, userId, partnerData, isLoading, error, isOffline, configError, updateWater, updateTarget, linkPartner, unlinkPartner, sendNotificationToPartner };
 };

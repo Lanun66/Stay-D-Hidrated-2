@@ -4,21 +4,21 @@ import { getFirestore } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { getMessaging } from "firebase/messaging";
 
-// PENTING: Ganti nilai-nilai placeholder di bawah ini dengan kredensial
-// dari proyek Firebase Anda. Anda bisa menemukannya di
-// Project Settings > General di Firebase Console.
+// Konfigurasi Firebase yang valid dari Firebase Console
 const firebaseConfig = {
-  apiKey: "REPLACE_WITH_YOUR_API_KEY",
-  authDomain: "REPLACE_WITH_YOUR_AUTH_DOMAIN",
-  projectId: "REPLACE_WITH_YOUR_PROJECT_ID",
-  storageBucket: "REPLACE_WITH_YOUR_STORAGE_BUCKET",
-  messagingSenderId: "REPLACE_WITH_YOUR_MESSAGING_SENDER_ID",
-  appId: "REPLACE_WITH_YOUR_APP_ID"
+  apiKey: "AIzaSyBoYkS07i48_TTc2dBJq8xKpkj-cC7dq8M",
+  authDomain: "stay-d-hidrated-2.firebaseapp.com",
+  projectId: "stay-d-hidrated-2",
+  storageBucket: "stay-d-hidrated-2.appspot.com",
+  messagingSenderId: "938308592276",
+  appId: "1:938308592276:web:39b3b9624387136ffdca81",
+  measurementId: "G-ZLXV7W9L23"
 };
 
 // Fungsi untuk memeriksa apakah konfigurasi Firebase valid
 export const isFirebaseConfigValid = () => {
-    return !Object.values(firebaseConfig).some(value => value.startsWith('REPLACE_WITH_YOUR'));
+    // Kredensial yang valid tidak akan pernah dimulai dengan string placeholder ini
+    return !Object.values(firebaseConfig).some(value => value.includes('REPLACE_WITH_YOUR'));
 };
 
 // Inisialisasi Firebase
@@ -35,7 +35,7 @@ export const signIn = async () => {
         return userCredential.user;
     } catch (error) {
         console.error("Error signing in anonymously:", error);
-        // Lemparkan galat agar dapat ditangkap oleh pemanggil
+        // Melempar galat asli untuk ditangani oleh pemanggil
         throw error;
     }
 };
