@@ -1,5 +1,5 @@
-
 import React from 'react';
+import WaterGlass from './WaterGlass';
 
 interface WaterProgressProps {
   progress: number;
@@ -39,10 +39,7 @@ const WaterProgress: React.FC<WaterProgressProps> = ({ progress, currentAmount }
           className="transition-all duration-700 ease-out"
         />
       </svg>
-      <div className="text-center">
-        <span className="text-5xl font-black tracking-tighter">{currentAmount.toFixed(2)}</span>
-        <span className="text-2xl font-bold text-blue-100">L</span>
-      </div>
+      <WaterGlass progress={progress} currentAmount={currentAmount} />
     </div>
   );
 };
