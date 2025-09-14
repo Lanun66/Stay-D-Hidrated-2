@@ -1,209 +1,323 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
+    onAuthStateChanged,
+    signInAnonymously,
+    User,
+} from 'firebase/auth';
+import {
     doc,
-    getDoc,
     setDoc,
+    getDoc,
     onSnapshot,
     updateDoc,
-    Timestamp,
+    collection,
+    query,
+    orderBy,
+    limit,
+    serverTimestamp,
+    writeBatch,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
-import { db, auth, functions, signIn, isFirebaseConfigValid } from '../firebase/config';
+import { firebaseServices, httpsCallable } from '../firebase/config';
 
 interface WaterData {
-    current: number;
-    target: number;
-    lastUpdated: Timestamp;
-    partnerId: string | null;
-    history: { date: string; amount: number }[];
-}
-
-interface LocalStorageData {
-    current: number;
-    target: number;
-    history: { date: string; amount: number }[];
-}
-
-interface PartnerData {
     id: string;
     current: number;
     target: number;
+    partnerId: string | null;
+}
+
+interface HistoryEntry {
+    date: string; // YYYY-MM-DD
+    amount: number;
 }
 
 const getTodayDateString = () => {
     const today = new Date();
-    const offset = today.getTimezoneOffset();
-    const todayLocal = new Date(today.getTime() - (offset * 60 * 1000));
-    return todayLocal.toISOString().split('T')[0];
+    const year = today.getFullYear();
+    const month = (today.getMonth() + 1).toString().padStart(2, '0');
+    const day = today.getDate().toString().padStart(2, '0');
+    return `${year}-${month}-${day}`;
 };
 
 export const useFirestoreWaterTracker = () => {
-    const initialIsOffline = !isFirebaseConfigValid();
-    const [isOffline, setIsOffline] = useState(initialIsOffline);
-    const [userId, setUserId] = useState<string | null>(null);
-    const [waterData, setWaterData] = useState<WaterData>({
-        current: 0,
-        target: 2.0,
-        lastUpdated: Timestamp.now(),
-        partnerId: null,
-        history: [],
-    });
-    const [partnerData, setPartnerData] = useState<PartnerData | null>(null);
     const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-    const [configError, setConfigError] = useState<string | null>(null);
-
-    const initializeOfflineMode = useCallback(() => {
-        console.log("Aplikasi berjalan dalam mode offline.");
-        const savedData = localStorage.getItem('hydroHomieData');
-        const todayStr = getTodayDateString();
-        let data: LocalStorageData;
-
-        if (savedData) {
-            data = JSON.parse(savedData);
-            const lastHistoryEntry = data.history.length > 0 ? data.history[data.history.length - 1] : null;
-            if (lastHistoryEntry && lastHistoryEntry.date !== todayStr) {
-                data.current = 0; // Reset for a new day
-            }
-        } else {
-            data = { current: 0, target: 2.0, history: [] };
-        }
-        setWaterData({ ...data, lastUpdated: Timestamp.now(), partnerId: null });
-    }, []);
+    const [error, setError] = useState<string | null>(null); // For fatal errors
+    const [toastError, setToastError] = useState<string | null>(null); // For non-fatal errors
+    const [userId, setUserId] = useState<string | null>(null);
+    const [current, setCurrent] = useState(0);
+    const [target, setTarget] = useState(2); // Default target 2L
+    const [partnerId, setPartnerId] = useState<string | null>(null);
+    const [partnerData, setPartnerData] = useState<WaterData | null>(null);
+    const [history, setHistory] = useState<HistoryEntry[]>([]);
+    
+    const [isOffline] = useState(!firebaseServices);
+    const [configError] = useState(
+        !firebaseServices
+            ? "Konfigurasi Firebase tidak valid. Fitur online dinonaktifkan."
+            : null
+    );
 
     useEffect(() => {
-        const initialize = async () => {
-            setIsLoading(true);
-
-            if (initialIsOffline) {
-                initializeOfflineMode();
-                setIsLoading(false);
-                return;
-            }
-
-            // Try online mode
-            try {
-                await signIn();
-                const currentUser = auth.currentUser;
-                if (!currentUser) throw new Error("Gagal mengautentikasi pengguna.");
-                
-                setUserId(currentUser.uid);
-
-                const userRef = doc(db, 'users', currentUser.uid);
-                const userSnap = await getDoc(userRef);
-                
-                if (userSnap.exists()) {
-                    const data = userSnap.data() as Omit<WaterData, 'history'> & { history?: WaterData['history'] };
-                    const todayStr = getTodayDateString();
-                    const lastUpdatedDate = data.lastUpdated.toDate().toISOString().split('T')[0];
-                    
-                    if (lastUpdatedDate !== todayStr) {
-                         const updatedData = { ...data, current: 0, lastUpdated: Timestamp.now() };
-                        setWaterData({ ...updatedData, history: data.history || [] });
-                        await updateDoc(userRef, { current: 0, lastUpdated: Timestamp.now() });
-                    } else {
-                         setWaterData({
-                            current: data.current,
-                            target: data.target,
-                            lastUpdated: data.lastUpdated,
-                            partnerId: data.partnerId || null,
-                            history: data.history || [],
-                        });
-                    }
-                } else {
-                    const newUserData: WaterData = { current: 0, target: 2.0, lastUpdated: Timestamp.now(), partnerId: null, history: [] };
-                    await setDoc(userRef, newUserData);
-                    setWaterData(newUserData);
-                }
-            } catch (err: any) {
-                console.error("Initialization Error:", err);
-                if (err.code === 'auth/configuration-not-found') {
-                    console.warn("Kesalahan konfigurasi Firebase terdeteksi. Beralih ke mode offline.");
-                    setConfigError("Koneksi gagal. Pastikan 'Anonymous Authentication' telah diaktifkan di Firebase Console Anda.");
-                    setIsOffline(true);
-                    initializeOfflineMode();
-                } else {
-                    setError("Gagal terhubung ke Firebase. Periksa koneksi dan konfigurasi Anda.");
-                }
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        initialize();
-    }, [initialIsOffline, initializeOfflineMode]);
-
-    useEffect(() => {
-        if (isOffline || !waterData.partnerId) {
-            setPartnerData(null);
+        if (isOffline || !firebaseServices) {
+            setIsLoading(false);
             return;
         }
-        const partnerRef = doc(db, 'users', waterData.partnerId);
-        const unsubscribe = onSnapshot(partnerRef, (doc) => {
-            if (doc.exists()) {
-                const data = doc.data();
-                setPartnerData({ id: doc.id, current: data.current, target: data.target });
+
+        const { auth } = firebaseServices;
+        const unsubscribe = onAuthStateChanged(auth, async (user: User | null) => {
+            if (user) {
+                setUserId(user.uid);
+            } else {
+                try {
+                    await signInAnonymously(auth);
+                } catch (e) {
+                    console.error("Anonymous sign-in failed", e);
+                    setError("Gagal terhubung ke layanan otentikasi. Silakan muat ulang.");
+                    setIsLoading(false);
+                }
             }
         });
         return () => unsubscribe();
-    }, [isOffline, waterData.partnerId]);
+    }, [isOffline]);
+    
+    useEffect(() => {
+        if (!userId || isOffline || !firebaseServices) return;
 
-    const updateWater = useCallback(async (amount: number) => {
-        const newAmount = Math.max(0, waterData.current + amount);
-        const todayStr = getTodayDateString();
-        const newHistory = [...waterData.history];
-        const todayEntryIndex = newHistory.findIndex(h => h.date === todayStr);
+        const { db } = firebaseServices;
+        const userRef = doc(db, 'users', userId);
+        const unsubscribeUser = onSnapshot(userRef, async (docSnap) => {
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                setTarget(data.target || 2);
+                setPartnerId(data.partnerId || null);
+            } else {
+                await setDoc(userRef, { target: 2, partnerId: null, createdAt: serverTimestamp() });
+                setTarget(2);
+            }
+            if (isLoading) setIsLoading(false);
+        }, (err) => {
+            console.error("Error fetching user data:", err);
+            if (err.code === 'permission-denied') {
+                setError("Akses data ditolak. Periksa aturan keamanan Firestore Anda.");
+            } else if (err.code !== 'unavailable') {
+                setToastError("Gagal menyinkronkan data pengguna. Menampilkan data offline.");
+            }
+            if (isLoading) setIsLoading(false);
+        });
 
-        if (todayEntryIndex !== -1) {
-            newHistory[todayEntryIndex].amount = newAmount;
-        } else {
-            newHistory.push({ date: todayStr, amount: newAmount });
+        const today = getTodayDateString();
+        const historyRef = doc(db, `users/${userId}/history`, today);
+        const unsubscribeHistory = onSnapshot(historyRef, (historySnap) => {
+            setCurrent(historySnap.exists() ? historySnap.data().amount : 0);
+        }, (err) => {
+            console.error("Error fetching today's history:", err);
+            if (err.code !== 'unavailable') {
+                setToastError("Gagal menyinkronkan data hari ini.");
+            }
+            setCurrent(0);
+        });
+
+        return () => {
+            unsubscribeUser();
+            unsubscribeHistory();
+        };
+    }, [userId, isOffline, isLoading]);
+    
+    useEffect(() => {
+        if (!userId || isOffline || !firebaseServices) return;
+        
+        const { db } = firebaseServices;
+        const historyCol = collection(db, `users/${userId}/history`);
+        const q = query(historyCol, orderBy('date', 'desc'), limit(7));
+        
+        const unsubscribe = onSnapshot(q, (querySnapshot) => {
+            const historyData: HistoryEntry[] = [];
+            querySnapshot.forEach((doc) => {
+                historyData.push({ date: doc.id, ...doc.data() } as HistoryEntry);
+            });
+            setHistory(historyData.reverse());
+        }, (err) => {
+             console.error("Error fetching history:", err);
+             if (err.code !== 'unavailable') {
+                setToastError("Gagal memuat riwayat minum.");
+             }
+        });
+
+        return () => unsubscribe();
+    }, [userId, isOffline]);
+    
+    useEffect(() => {
+        if (!partnerId || isOffline || !firebaseServices) {
+            setPartnerData(null);
+            return;
         }
         
-        const stateUpdate = { ...waterData, current: newAmount, history: newHistory };
-        setWaterData(stateUpdate);
+        const { db } = firebaseServices;
+        const partnerRef = doc(db, 'users', partnerId);
+        let unsubscribePartnerHistory: () => void = () => {};
 
-        if (isOffline) {
-            localStorage.setItem('hydroHomieData', JSON.stringify({ current: newAmount, target: waterData.target, history: newHistory }));
-        } else if (userId) {
-            await updateDoc(doc(db, 'users', userId), { current: newAmount, history: newHistory, lastUpdated: Timestamp.now() });
+        const unsubscribePartner = onSnapshot(partnerRef, (docSnap) => {
+            unsubscribePartnerHistory();
+
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                const today = getTodayDateString();
+                const partnerHistoryRef = doc(db, `users/${partnerId}/history`, today);
+                
+                unsubscribePartnerHistory = onSnapshot(partnerHistoryRef, (historySnap) => {
+                    setPartnerData({
+                        id: docSnap.id,
+                        target: data.target || 2,
+                        partnerId: data.partnerId || null,
+                        current: historySnap.exists() ? historySnap.data().amount : 0,
+                    });
+                }, (err) => {
+                    console.error("Error fetching partner history:", err);
+                    if (err.code !== 'unavailable') {
+                        setToastError("Gagal menyinkronkan data pasangan.");
+                    }
+                });
+            } else {
+                setPartnerData(null);
+            }
+        }, (err) => {
+            console.error("Error fetching partner data:", err);
+            if (err.code !== 'unavailable') {
+                setToastError("Gagal memuat data pasangan.");
+            }
+            setPartnerData(null);
+        });
+
+        return () => {
+            unsubscribePartner();
+            unsubscribePartnerHistory();
+        };
+    }, [partnerId, isOffline]);
+
+    const updateWater = useCallback(async (amount: number) => {
+        if (!userId || isOffline || !firebaseServices) return;
+
+        const { db } = firebaseServices;
+        const newCurrent = current + amount;
+        const today = getTodayDateString();
+        const historyRef = doc(db, `users/${userId}/history`, today);
+        
+        try {
+             await setDoc(historyRef, { amount: newCurrent, date: today }, { merge: true });
+        } catch (e) {
+            console.error("Error updating water intake: ", e);
+            setToastError("Gagal menyimpan data. Periksa koneksi Anda.");
         }
-    }, [userId, waterData, isOffline]);
+    }, [current, userId, isOffline]);
 
     const updateTarget = useCallback(async (newTarget: number) => {
-        if (newTarget <= 0) return;
-        setWaterData(prev => ({ ...prev, target: newTarget }));
-        if (isOffline) {
-            const data = { current: waterData.current, target: newTarget, history: waterData.history };
-            localStorage.setItem('hydroHomieData', JSON.stringify(data));
-        } else if (userId) {
-            await updateDoc(doc(db, 'users', userId), { target: newTarget });
+        if (!userId || newTarget <= 0 || isOffline || !firebaseServices) return;
+
+        const { db } = firebaseServices;
+        const userRef = doc(db, 'users', userId);
+        try {
+            await updateDoc(userRef, { target: newTarget });
+        } catch(e) {
+            console.error("Error updating target: ", e);
+            setToastError("Gagal memperbarui target. Periksa koneksi Anda.");
         }
-    }, [userId, waterData, isOffline]);
+    }, [userId, isOffline]);
 
     const linkPartner = useCallback(async (newPartnerId: string) => {
-        if (isOffline || !userId) return;
-        if (userId === newPartnerId) return alert("Anda tidak bisa menghubungkan dengan diri sendiri.");
+        if (!userId || userId === newPartnerId || isOffline || !firebaseServices) return;
+        
+        const { db } = firebaseServices;
+        const userRef = doc(db, 'users', userId);
         const partnerRef = doc(db, 'users', newPartnerId);
-        const partnerSnap = await getDoc(partnerRef);
-        if (!partnerSnap.exists()) return alert("ID Pasangan tidak ditemukan.");
-        await updateDoc(doc(db, 'users', userId), { partnerId: newPartnerId });
-        setWaterData(prev => ({ ...prev, partnerId: newPartnerId }));
-        alert("Berhasil terhubung dengan pasangan!");
-    }, [isOffline, userId]);
+
+        try {
+            const partnerSnap = await getDoc(partnerRef);
+            
+            if (!partnerSnap.exists()) {
+                setToastError("ID Pasangan tidak ditemukan.");
+                return;
+            }
+
+            const batch = writeBatch(db);
+            batch.update(userRef, { partnerId: newPartnerId });
+            batch.update(partnerRef, { partnerId: userId });
+            await batch.commit();
+        } catch (e: any) {
+            if (e.code === 'unavailable') {
+                setToastError("Koneksi internet tidak stabil. Coba lagi nanti.");
+            } else {
+                console.error("Error linking partner: ", e);
+                setToastError("Gagal menghubungkan dengan pasangan.");
+            }
+        }
+    }, [userId, isOffline]);
 
     const unlinkPartner = useCallback(async () => {
-        if (isOffline || !userId) return;
-        await updateDoc(doc(db, 'users', userId), { partnerId: null });
-        setWaterData(prev => ({ ...prev, partnerId: null }));
-        alert("Hubungan dengan pasangan telah diputuskan.");
-    }, [isOffline, userId]);
+        if (!userId || !partnerId || isOffline || !firebaseServices) return;
+        
+        const { db } = firebaseServices;
+        const userRef = doc(db, 'users', userId);
+        const partnerRef = doc(db, 'users', partnerId);
 
-    const sendNotificationToPartner = useCallback(async (type: 'encouragement' | 'reminder', partnerInfo: { id: string, current: number, target: number }) => {
-        if (isOffline) return alert("Fitur notifikasi memerlukan mode online.");
-        const sendNotification = httpsCallable(functions, 'sendNotification');
-        await sendNotification({ recipientId: partnerInfo.id, type: type, senderId: userId, partnerCurrent: partnerInfo.current, partnerTarget: partnerInfo.target });
-        alert(`Pesan terkirim!`);
-    }, [isOffline, userId]);
+        try {
+            const batch = writeBatch(db);
+            batch.update(userRef, { partnerId: null });
+            batch.update(partnerRef, { partnerId: null });
+            await batch.commit();
+        } catch (e) {
+            console.error("Error unlinking partner: ", e);
+            setToastError("Gagal memutuskan hubungan. Periksa koneksi Anda.");
+        }
+    }, [userId, partnerId, isOffline]);
+    
+    const sendNotificationToPartner = useCallback(async (
+        type: 'encouragement' | 'reminder',
+        partnerInfo: { id: string; current: number; target: number }
+    ) => {
+        if (!userId || isOffline || !firebaseServices) {
+             setToastError("Fitur notifikasi tidak tersedia saat ini.");
+            return;
+        }
+        
+        const { functions } = firebaseServices;
+        try {
+            const sendNotification = httpsCallable(functions, 'sendNotification');
+            await sendNotification({
+                recipientId: partnerInfo.id,
+                type: type,
+                senderId: userId,
+                partnerCurrent: partnerInfo.current,
+                partnerTarget: partnerInfo.target,
+            });
+            // This alert can be replaced by a success toast in the future
+            alert(`Pesan ${type === 'encouragement' ? 'semangat' : 'pengingat'} terkirim!`);
+        } catch (e) {
+            console.error("Error sending notification:", e);
+            setToastError("Gagal mengirim notifikasi. Pastikan Cloud Function 'sendNotification' sudah di-deploy.");
+        }
+    }, [userId, isOffline]);
 
-    return { ...waterData, userId, partnerData, isLoading, error, isOffline, configError, updateWater, updateTarget, linkPartner, unlinkPartner, sendNotificationToPartner };
+    const clearToastError = useCallback(() => {
+        setToastError(null);
+    }, []);
+
+    return {
+        userId,
+        current,
+        target,
+        partnerId,
+        partnerData,
+        history,
+        isLoading,
+        error,
+        toastError,
+        clearToastError,
+        isOffline,
+        configError,
+        updateWater,
+        updateTarget,
+        linkPartner,
+        unlinkPartner,
+        sendNotificationToPartner,
+    };
 };

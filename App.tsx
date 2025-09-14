@@ -9,6 +9,7 @@ import PartnerProgress from './components/PartnerProgress';
 import HistoryChart from './components/HistoryChart';
 import NotificationManager from './components/NotificationManager';
 import ConfigWarningBanner from './components/ConfigWarningBanner';
+import ErrorToast from './components/ErrorToast';
 
 function App() {
     const {
@@ -19,9 +20,11 @@ function App() {
         partnerData,
         history,
         isLoading,
-        error,
+        error, // Fatal errors
+        toastError, // Non-fatal errors
+        clearToastError, // Function to clear toast error
         isOffline,
-        configError, // Specific error for configuration issues
+        configError,
         updateWater,
         updateTarget,
         linkPartner,
@@ -30,6 +33,14 @@ function App() {
     } = useFirestoreWaterTracker();
 
     const [showConfetti, setShowConfetti] = useState(false);
+    const [activeToast, setActiveToast] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (toastError) {
+            setActiveToast(toastError);
+            clearToastError();
+        }
+    }, [toastError, clearToastError]);
 
     const progress = useMemo(() => {
         if (target === 0) return 0;
@@ -41,7 +52,7 @@ function App() {
     useEffect(() => {
         if (isGoalReached) {
             setShowConfetti(true);
-            const timer = setTimeout(() => setShowConfetti(false), 5000); // Confetti for 5 seconds
+            const timer = setTimeout(() => setShowConfetti(false), 5000);
             return () => clearTimeout(timer);
         }
     }, [isGoalReached]);
@@ -62,20 +73,30 @@ function App() {
     if (error) {
         return (
             <div className="w-screen h-screen flex flex-col items-center justify-center bg-gradient-to-br from-red-400 to-red-600 text-white font-sans p-4 text-center">
-                <h1 className="text-3xl font-bold mb-4">Oops! Terjadi Kesalahan</h1>
+                <h1 className="text-3xl font-bold mb-4">Oops! Terjadi Kesalahan Kritis</h1>
                 <p className="text-lg">{error}</p>
+                <p className="text-sm mt-2">Silakan muat ulang halaman.</p>
             </div>
         );
     }
 
     return (
         <div className="w-screen min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 bg-gradient-to-br from-blue-400 to-blue-600 text-white font-sans overflow-y-auto">
+            {/* Overlays: Banners, Toasts, Confetti */}
             {isOffline && <ConfigWarningBanner message={configError} />}
             {!isOffline && <NotificationManager userId={userId} />}
             {showConfetti && <Confetti />}
+            <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[60] w-full max-w-sm px-4">
+                {activeToast && (
+                    <ErrorToast 
+                        message={activeToast}
+                        onDismiss={() => setActiveToast(null)}
+                    />
+                )}
+            </div>
 
             <main className="w-full max-w-md flex flex-col items-center space-y-6">
-                <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-shadow-lg">HydroHomie</h1>
+                <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-shadow-lg text-center">Stay D Hidrated by Ayy</h1>
                 
                 <div className="flex flex-col items-center space-y-4">
                     <WaterProgress progress={progress} currentAmount={current} />
