@@ -1,219 +1,197 @@
 import { useState, useEffect, useCallback } from 'react';
-import { db, signIn, functions, httpsCallable, isFirebaseConfigValid } from '../firebase/config';
-import { doc, setDoc, onSnapshot, serverTimestamp, DocumentData } from 'firebase/firestore';
-import { User } from 'firebase/auth';
+import {
+    doc,
+    getDoc,
+    setDoc,
+    onSnapshot,
+    updateDoc,
+    Timestamp,
+} from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { db, auth, functions, signIn, isFirebaseConfigValid } from '../firebase/config';
 
-const PARTNER_ID_KEY = 'waterTrackerPartnerId';
-const LOCAL_WATER_DATA_KEY = 'localWaterData';
-
-export interface UserWaterData {
-    currentAmount: number;
-    targetAmount: number;
-    progressPercentage: number;
-    lastUpdate: any;
-    name?: string;
+interface WaterData {
+    current: number;
+    target: number;
+    lastUpdated: Timestamp;
+    partnerId: string | null;
+    history: { date: string; amount: number }[];
 }
 
-const defaultUserData: UserWaterData = {
-    currentAmount: 0,
-    targetAmount: 2.5,
-    progressPercentage: 0,
-    lastUpdate: null,
-};
+interface LocalStorageData {
+    current: number;
+    target: number;
+    history: { date: string; amount: number }[];
+}
 
-const calculateProgress = (data: Partial<UserWaterData> | DocumentData | null | undefined): UserWaterData => {
-    const current = data?.currentAmount ?? data?.progress ?? 0;
-    const target = data?.targetAmount ?? data?.target ?? 2.5;
-    const progress = target > 0 ? Math.min((current / target) * 100, 100) : 0;
-    return {
-        currentAmount: current,
-        targetAmount: target,
-        progressPercentage: progress,
-        lastUpdate: data?.lastUpdate,
-        name: data?.name || 'Pengguna',
-    };
+interface PartnerData {
+    id: string;
+    current: number;
+    target: number;
+}
+
+const getTodayDateString = () => {
+    const today = new Date();
+    const offset = today.getTimezoneOffset();
+    const todayLocal = new Date(today.getTime() - (offset * 60 * 1000));
+    return todayLocal.toISOString().split('T')[0];
 };
 
 export const useFirestoreWaterTracker = () => {
+    const isOffline = !isFirebaseConfigValid();
+    const [userId, setUserId] = useState<string | null>(null);
+    const [waterData, setWaterData] = useState<WaterData>({
+        current: 0,
+        target: 2.0,
+        lastUpdated: Timestamp.now(),
+        partnerId: null,
+        history: [],
+    });
+    const [partnerData, setPartnerData] = useState<PartnerData | null>(null);
     const [isLoading, setIsLoading] = useState(true);
-    const [isOnlineMode, setIsOnlineMode] = useState(false);
-    const [configError, setConfigError] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
 
-    const [user, setUser] = useState<User | null>(null);
-    const [currentUserData, setCurrentUserData] = useState<UserWaterData>(defaultUserData);
-    const [partnerUserData, setPartnerUserData] = useState<UserWaterData | null>(null);
-    const [partnerId, setPartnerId] = useState<string | null>(null);
-
-    // Mode Initialization
     useEffect(() => {
-        if (isFirebaseConfigValid()) {
-            setIsOnlineMode(true);
-            const authenticate = async () => {
-                try {
-                    const signedInUser = await signIn();
-                    setUser(signedInUser);
-                } catch (e) {
-                    console.error("Firebase Authentication failed:", e);
-                    setIsOnlineMode(false); // Fallback to offline mode
-                    setConfigError("Gagal terhubung ke Firebase. Periksa kredensial dan koneksi Anda.");
+        const initialize = async () => {
+            setIsLoading(true);
+            setError(null);
+
+            if (isOffline) {
+                // --- OFFLINE MODE ---
+                console.log("Aplikasi berjalan dalam mode offline.");
+                const savedData = localStorage.getItem('hydroHomieData');
+                const todayStr = getTodayDateString();
+                let data: LocalStorageData;
+
+                if (savedData) {
+                    data = JSON.parse(savedData);
+                    const lastHistoryEntry = data.history[data.history.length - 1];
+                    if (lastHistoryEntry && lastHistoryEntry.date !== todayStr) {
+                        data.current = 0; // Reset for a new day
+                    }
+                } else {
+                    data = { current: 0, target: 2.0, history: [] };
                 }
-            };
-            authenticate();
-        } else {
-            setIsOnlineMode(false);
-            setConfigError("Mode offline: Konfigurasi Firebase untuk mengaktifkan sinkronisasi pasangan.");
-            // Load local data
-            const savedData = localStorage.getItem(LOCAL_WATER_DATA_KEY);
-            if (savedData) {
-                setCurrentUserData(calculateProgress(JSON.parse(savedData)));
-            }
-            // Load partner ID for display purposes, even if offline
-            setPartnerId(localStorage.getItem(PARTNER_ID_KEY));
-            setIsLoading(false);
-        }
-    }, []);
-
-    // Local Mode: Save to localStorage
-    useEffect(() => {
-        if (!isOnlineMode) {
-            localStorage.setItem(LOCAL_WATER_DATA_KEY, JSON.stringify({
-                currentAmount: currentUserData.currentAmount,
-                targetAmount: currentUserData.targetAmount,
-            }));
-        }
-    }, [currentUserData, isOnlineMode]);
-
-
-    // Online Mode: Firestore listener for current user
-    useEffect(() => {
-        if (!isOnlineMode || !user) {
-             if (isOnlineMode) setIsLoading(false);
-            return;
-        }
-
-        const userRef = doc(db, 'users', user.uid);
-        const unsubscribe = onSnapshot(userRef, (docSnap) => {
-            if (docSnap.exists()) {
-                setCurrentUserData(calculateProgress(docSnap.data()));
+                setWaterData({ ...data, lastUpdated: Timestamp.now(), partnerId: null });
+                setIsLoading(false);
             } else {
-                setDoc(userRef, { 
-                    name: `Pengguna ${user.uid.substring(0, 5)}`,
-                    progress: 0, 
-                    target: 2.5, 
-                    lastUpdate: serverTimestamp() 
-                });
+                // --- ONLINE MODE ---
+                try {
+                    await signIn();
+                    const currentUser = auth.currentUser;
+                    if (!currentUser) throw new Error("Gagal mengautentikasi pengguna.");
+                    
+                    setUserId(currentUser.uid);
+
+                    const userRef = doc(db, 'users', currentUser.uid);
+                    const userSnap = await getDoc(userRef);
+                    
+                    if (userSnap.exists()) {
+                        const data = userSnap.data() as Omit<WaterData, 'history'> & { history?: WaterData['history'] };
+                        const todayStr = getTodayDateString();
+                        const lastUpdatedDate = data.lastUpdated.toDate().toISOString().split('T')[0];
+                        
+                        if (lastUpdatedDate !== todayStr) {
+                             const updatedData = { ...data, current: 0, lastUpdated: Timestamp.now() };
+                            setWaterData({ ...updatedData, history: data.history || [] });
+                            await updateDoc(userRef, { current: 0, lastUpdated: Timestamp.now() });
+                        } else {
+                             setWaterData({
+                                current: data.current,
+                                target: data.target,
+                                lastUpdated: data.lastUpdated,
+                                partnerId: data.partnerId || null,
+                                history: data.history || [],
+                            });
+                        }
+                    } else {
+                        const newUserData: WaterData = { current: 0, target: 2.0, lastUpdated: Timestamp.now(), partnerId: null, history: [] };
+                        await setDoc(userRef, newUserData);
+                        setWaterData(newUserData);
+                    }
+                } catch (err: any) {
+                    console.error("Initialization Error:", err);
+                    setError("Gagal terhubung ke Firebase. Periksa koneksi dan konfigurasi Anda.");
+                } finally {
+                    setIsLoading(false);
+                }
             }
-            setIsLoading(false);
-        }, (err) => {
-            console.error("Firestore snapshot error:", err);
-            setIsLoading(false);
-        });
+        };
+        initialize();
+    }, [isOffline]);
 
-        return () => unsubscribe();
-    }, [isOnlineMode, user]);
-
-     // Online Mode: Load partner and listen for changes
     useEffect(() => {
-        if (isOnlineMode) {
-             setPartnerId(localStorage.getItem(PARTNER_ID_KEY));
-        }
-    }, [isOnlineMode]);
-
-    // Online Mode: Firestore listener for partner
-    useEffect(() => {
-        if (!isOnlineMode || !partnerId) {
-            setPartnerUserData(null);
+        if (isOffline || !waterData.partnerId) {
+            setPartnerData(null);
             return;
         }
-
-        const partnerRef = doc(db, 'users', partnerId);
-        const unsubscribe = onSnapshot(partnerRef, (docSnap) => {
-            setPartnerUserData(docSnap.exists() ? calculateProgress(docSnap.data()) : null);
+        const partnerRef = doc(db, 'users', waterData.partnerId);
+        const unsubscribe = onSnapshot(partnerRef, (doc) => {
+            if (doc.exists()) {
+                const data = doc.data();
+                setPartnerData({ id: doc.id, current: data.current, target: data.target });
+            }
         });
-
         return () => unsubscribe();
-    }, [isOnlineMode, partnerId]);
-    
-    // --- Actions ---
+    }, [isOffline, waterData.partnerId]);
 
-    const addWater = useCallback(() => {
-        const newAmount = currentUserData.currentAmount + 0.25;
-        if (isOnlineMode && user) {
-            const userRef = doc(db, 'users', user.uid);
-            setDoc(userRef, { progress: newAmount }, { merge: true });
+    const updateWater = useCallback(async (amount: number) => {
+        const newAmount = Math.max(0, waterData.current + amount);
+        const todayStr = getTodayDateString();
+        const newHistory = [...waterData.history];
+        const todayEntryIndex = newHistory.findIndex(h => h.date === todayStr);
+
+        if (todayEntryIndex !== -1) {
+            newHistory[todayEntryIndex].amount = newAmount;
         } else {
-            setCurrentUserData(prev => calculateProgress({ ...prev, currentAmount: newAmount }));
+            newHistory.push({ date: todayStr, amount: newAmount });
         }
-    }, [currentUserData, isOnlineMode, user]);
+        
+        const stateUpdate = { ...waterData, current: newAmount, history: newHistory };
+        setWaterData(stateUpdate);
 
-    const resetWater = useCallback(() => {
-        if (isOnlineMode && user) {
-            const userRef = doc(db, 'users', user.uid);
-            setDoc(userRef, { progress: 0 }, { merge: true });
-        } else {
-            setCurrentUserData(prev => calculateProgress({ ...prev, currentAmount: 0 }));
+        if (isOffline) {
+            localStorage.setItem('hydroHomieData', JSON.stringify({ current: newAmount, target: waterData.target, history: newHistory }));
+        } else if (userId) {
+            await updateDoc(doc(db, 'users', userId), { current: newAmount, history: newHistory, lastUpdated: Timestamp.now() });
         }
-    }, [isOnlineMode, user]);
-    
-    const linkPartner = useCallback((id: string) => {
-        if (!isOnlineMode) {
-            alert("Fitur ini memerlukan koneksi ke Firebase. Silakan konfigurasikan kredensial Anda.");
-            return;
-        }
-        const trimmedId = id.trim();
-        if (trimmedId && trimmedId !== user?.uid) {
-            localStorage.setItem(PARTNER_ID_KEY, trimmedId);
-            setPartnerId(trimmedId);
-        } else {
-            alert("ID Pasangan tidak valid atau sama dengan ID Anda.");
-        }
-    }, [isOnlineMode, user]);
+    }, [userId, waterData, isOffline]);
 
-    const unlinkPartner = useCallback(() => {
-        localStorage.removeItem(PARTNER_ID_KEY);
-        setPartnerId(null);
-    }, []);
+    const updateTarget = useCallback(async (newTarget: number) => {
+        if (newTarget <= 0) return;
+        setWaterData(prev => ({ ...prev, target: newTarget }));
+        if (isOffline) {
+            const data = { current: waterData.current, target: newTarget, history: waterData.history };
+            localStorage.setItem('hydroHomieData', JSON.stringify(data));
+        } else if (userId) {
+            await updateDoc(doc(db, 'users', userId), { target: newTarget });
+        }
+    }, [userId, waterData, isOffline]);
 
-    const sendNotificationToPartner = useCallback(async (
-        type: 'encouragement' | 'reminder',
-        partnerData: { id: string; current: number; target: number }
-    ) => {
-        if (!isOnlineMode) {
-            alert("Fitur ini memerlukan koneksi ke Firebase.");
-            return;
-        }
-        if (!partnerData.id) {
-            alert("Tidak ada pasangan terhubung.");
-            return;
-        }
-        try {
-            const sendNotification = httpsCallable(functions, 'sendNotification');
-            await sendNotification({
-                recipientUid: partnerData.id,
-                type: type,
-                partnerCurrent: partnerData.current,
-                partnerTarget: partnerData.target,
-            });
-            alert('Notifikasi berhasil dikirim!');
-        } catch (error) {
-            console.error('Gagal mengirim notifikasi:', error);
-            alert('Gagal mengirim notifikasi. Pastikan Cloud Function sudah di-deploy.');
-        }
-    }, [isOnlineMode]);
+    const linkPartner = useCallback(async (newPartnerId: string) => {
+        if (isOffline || !userId) return;
+        if (userId === newPartnerId) return alert("Anda tidak bisa menghubungkan dengan diri sendiri.");
+        const partnerRef = doc(db, 'users', newPartnerId);
+        const partnerSnap = await getDoc(partnerRef);
+        if (!partnerSnap.exists()) return alert("ID Pasangan tidak ditemukan.");
+        await updateDoc(doc(db, 'users', userId), { partnerId: newPartnerId });
+        setWaterData(prev => ({ ...prev, partnerId: newPartnerId }));
+        alert("Berhasil terhubung dengan pasangan!");
+    }, [isOffline, userId]);
 
-    return {
-        currentUserData,
-        partnerUserData,
-        userId: user?.uid ?? null,
-        partnerId,
-        isGoalReached: currentUserData.progressPercentage >= 100,
-        isLoading,
-        isOnlineMode,
-        configError,
-        addWater,
-        resetWater,
-        linkPartner,
-        unlinkPartner,
-        sendNotificationToPartner,
-    };
+    const unlinkPartner = useCallback(async () => {
+        if (isOffline || !userId) return;
+        await updateDoc(doc(db, 'users', userId), { partnerId: null });
+        setWaterData(prev => ({ ...prev, partnerId: null }));
+        alert("Hubungan dengan pasangan telah diputuskan.");
+    }, [isOffline, userId]);
+
+    const sendNotificationToPartner = useCallback(async (type: 'encouragement' | 'reminder', partnerInfo: { id: string, current: number, target: number }) => {
+        if (isOffline) return alert("Fitur notifikasi memerlukan mode online.");
+        const sendNotification = httpsCallable(functions, 'sendNotification');
+        await sendNotification({ recipientId: partnerInfo.id, type: type, senderId: userId, partnerCurrent: partnerInfo.current, partnerTarget: partnerInfo.target });
+        alert(`Pesan terkirim!`);
+    }, [isOffline, userId]);
+
+    return { ...waterData, userId, partnerData, isLoading, error, isOffline, updateWater, updateTarget, linkPartner, unlinkPartner, sendNotificationToPartner };
 };
