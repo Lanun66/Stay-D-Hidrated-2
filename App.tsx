@@ -1,33 +1,34 @@
 import React from 'react';
-import { useWaterTracker } from './hooks/useWaterTracker';
-import { useNotificationReminder } from './hooks/useNotificationReminder';
+import { useFirestoreWaterTracker } from './hooks/useFirestoreWaterTracker';
 import WaterProgress from './components/WaterProgress';
 import AddWaterButton from './components/AddWaterButton';
 import Confetti from './components/Confetti';
-import BellIcon from './components/BellIcon';
+import UserLinker from './components/UserLinker';
+import PartnerProgress from './components/PartnerProgress';
 
 const App: React.FC = () => {
-  const { 
-    currentAmount, 
-    targetAmount, 
-    progress, 
-    isGoalReached, 
-    addWater, 
-    resetWater 
-  } = useWaterTracker(2.5, 0.25);
+  const {
+    currentUserData,
+    partnerUserData,
+    userId,
+    isGoalReached,
+    isLoading,
+    addWater,
+    resetWater,
+    linkPartner,
+    unlinkPartner,
+    partnerId,
+  } = useFirestoreWaterTracker();
 
-  const { 
-    isReminderEnabled, 
-    toggleReminder, 
-    permissionStatus 
-  } = useNotificationReminder(isGoalReached);
+  if (isLoading) {
+    return (
+      <div className="min-h-screen w-full bg-gradient-to-br from-sky-400 via-blue-500 to-indigo-600 text-white flex flex-col items-center justify-center">
+        <h1 className="text-3xl font-bold">Memuat Data...</h1>
+      </div>
+    );
+  }
 
-  const getReminderButtonTooltip = () => {
-    if (permissionStatus === 'denied') {
-        return 'Notifikasi diblokir oleh browser';
-    }
-    return isReminderEnabled ? 'Matikan pengingat minum' : 'Aktifkan pengingat minum';
-  };
+  const { progressPercentage, currentAmount, targetAmount } = currentUserData;
 
   return (
     <main className="relative min-h-screen w-full bg-gradient-to-br from-sky-400 via-blue-500 to-indigo-600 text-white flex flex-col items-center justify-center p-4 overflow-hidden">
@@ -37,13 +38,13 @@ const App: React.FC = () => {
         <p className="text-lg text-blue-100 mt-2">Tetap sehat, tetap terhidrasi.</p>
       </div>
 
-      <div className="relative mb-10 z-10">
-        <WaterProgress progress={progress} currentAmount={currentAmount} />
+      <div className="relative mb-6 z-10">
+        <WaterProgress progress={progressPercentage} currentAmount={currentAmount} />
       </div>
 
-      <div className="text-center mb-10 z-10">
+      <div className="text-center mb-6 z-10">
         <p className="text-xl font-medium">
-          <span className="font-bold text-2xl">{currentAmount.toFixed(2)}L</span> / {targetAmount}L
+          <span className="font-bold text-2xl">{currentAmount.toFixed(2)}L</span> / {targetAmount.toFixed(1)}L
         </p>
         {isGoalReached && (
           <p className="mt-2 text-green-300 font-semibold text-lg animate-pulse">
@@ -52,40 +53,35 @@ const App: React.FC = () => {
         )}
       </div>
       
-      <div className="flex items-center space-x-4 z-10">
+      <div className="flex items-center space-x-4 z-10 mb-8">
         <AddWaterButton onAdd={addWater} isGoalReached={isGoalReached}/>
         
-        <div className="flex flex-col space-y-2">
-            <button 
-              onClick={resetWater}
-              className="bg-white/10 hover:bg-white/20 text-white font-semibold py-3 px-5 rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-blue-500 focus:ring-white shadow-md backdrop-blur-sm"
-              aria-label="Atur ulang progres"
-            >
-              Reset
-            </button>
-            
-            <button
-                onClick={toggleReminder}
-                disabled={permissionStatus === 'denied'}
-                className={`
-                    group relative
-                    bg-white/10 hover:bg-white/20 text-white font-semibold py-3 px-5 rounded-full 
-                    transition-all duration-300 
-                    focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-blue-500 focus:ring-white 
-                    shadow-md backdrop-blur-sm
-                    disabled:opacity-50 disabled:cursor-not-allowed
-                `}
-                aria-label={getReminderButtonTooltip()}
-                title={getReminderButtonTooltip()}
-            >
-                <BellIcon className="w-5 h-5" isReminderEnabled={isReminderEnabled} />
-            </button>
+        <button 
+          onClick={resetWater}
+          className="bg-white/10 hover:bg-white/20 text-white font-semibold py-3 px-5 rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-blue-500 focus:ring-white shadow-md backdrop-blur-sm h-14"
+          aria-label="Atur ulang progres"
+        >
+          Reset
+        </button>
+      </div>
+
+      {partnerUserData && (
+        <div className="w-full max-w-sm z-10 mb-8">
+            <PartnerProgress
+                name={partnerId ? `Pasangan (${partnerId.substring(0, 6)}...)` : 'Pasangan'}
+                current={partnerUserData.currentAmount}
+                target={partnerUserData.targetAmount}
+                progress={partnerUserData.progressPercentage}
+            />
         </div>
-      </div>
-      
-      <div className="absolute bottom-4 text-center text-blue-200 text-sm z-10">
-        <p>Setiap tegukan berarti.</p>
-      </div>
+      )}
+
+      <UserLinker 
+        userId={userId} 
+        partnerId={partnerId} 
+        onLink={linkPartner} 
+        onUnlink={unlinkPartner} 
+      />
     </main>
   );
 };
