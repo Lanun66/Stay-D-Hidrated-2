@@ -1,6 +1,8 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { getMessaging } from "firebase/messaging";
 
 // TODO: Ganti dengan konfigurasi proyek Firebase Anda
 const firebaseConfig = {
@@ -16,6 +18,9 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const functions = getFunctions(app);
+const messaging = getMessaging(app);
+
 
 // Fungsi untuk masuk secara anonim
 export const signIn = async () => {
@@ -28,4 +33,4 @@ export const signIn = async () => {
     }
 };
 
-export { auth, db };
+export { auth, db, functions, messaging, httpsCallable };

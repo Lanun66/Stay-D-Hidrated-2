@@ -5,6 +5,7 @@ import AddWaterButton from './components/AddWaterButton';
 import Confetti from './components/Confetti';
 import UserLinker from './components/UserLinker';
 import PartnerProgress from './components/PartnerProgress';
+import NotificationManager from './components/NotificationManager';
 
 const App: React.FC = () => {
   const {
@@ -18,6 +19,7 @@ const App: React.FC = () => {
     linkPartner,
     unlinkPartner,
     partnerId,
+    sendNotificationToPartner,
   } = useFirestoreWaterTracker();
 
   if (isLoading) {
@@ -32,6 +34,7 @@ const App: React.FC = () => {
 
   return (
     <main className="relative min-h-screen w-full bg-gradient-to-br from-sky-400 via-blue-500 to-indigo-600 text-white flex flex-col items-center justify-center p-4 overflow-hidden">
+      <NotificationManager userId={userId} />
       {isGoalReached && <Confetti />}
       <div className="text-center mb-8 z-10">
         <h1 className="text-4xl font-bold tracking-tight">Hidrasi Harian</h1>
@@ -72,6 +75,8 @@ const App: React.FC = () => {
                 current={partnerUserData.currentAmount}
                 target={partnerUserData.targetAmount}
                 progress={partnerUserData.progressPercentage}
+                onSendNotification={sendNotificationToPartner}
+                partnerId={partnerId!}
             />
         </div>
       )}

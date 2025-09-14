@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
-import { db, signIn } from '../firebase/config';
+import { db, signIn, functions, httpsCallable } from '../firebase/config';
 import { doc, setDoc, onSnapshot, serverTimestamp, DocumentData } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 
 const PARTNER_ID_KEY = 'waterTrackerPartnerId';
 
-interface UserWaterData {
+export interface UserWaterData {
     currentAmount: number;
     targetAmount: number;
     progressPercentage: number;
     lastUpdate: any;
+    name?: string;
 }
 
 const defaultUserData: UserWaterData = {
@@ -29,6 +30,7 @@ const calculateProgress = (data: DocumentData | null | undefined): UserWaterData
         targetAmount: target,
         progressPercentage: progress,
         lastUpdate: data.lastUpdate,
+        name: data.name || 'Pengguna',
     };
 };
 
@@ -65,7 +67,12 @@ export const useFirestoreWaterTracker = () => {
                 setCurrentUserData(calculateProgress(docSnap.data()));
             } else {
                 // Create user document if it doesn't exist
-                setDoc(userRef, { progress: 0, target: 2.5, lastUpdate: serverTimestamp() });
+                setDoc(userRef, { 
+                    name: `Pengguna ${user.uid.substring(0, 5)}`,
+                    progress: 0, 
+                    target: 2.5, 
+                    lastUpdate: serverTimestamp() 
+                });
             }
             setIsLoading(false);
         });
@@ -126,6 +133,99 @@ export const useFirestoreWaterTracker = () => {
         setPartnerId(null);
     }, []);
 
+    const sendNotificationToPartner = useCallback(async (
+        type: 'encouragement' | 'reminder',
+        partnerData: { id: string; current: number; target: number }
+    ) => {
+        if (!partnerData.id) {
+            alert("Tidak ada pasangan terhubung.");
+            return;
+        }
+
+        /*
+        * PENTING: Kode ini memanggil Cloud Function bernama 'sendNotification'.
+        * Anda HARUS men-deploy fungsi ini ke proyek Firebase Anda.
+        *
+        * Berikut adalah contoh implementasi Cloud Function (index.ts):
+        *
+        * const functions = require("firebase-functions");
+        * const admin = require("firebase-admin");
+        * admin.initializeApp();
+        *
+        * exports.sendNotification = functions.https.onCall(async (data, context) => {
+        *   if (!context.auth) {
+        *     throw new functions.https.HttpsError("unauthenticated", "Fungsi ini harus dipanggil saat masuk.");
+        *   }
+        *
+        *   const senderUid = context.auth.uid;
+        *   const recipientUid = data.recipientUid;
+        *   const type = data.type;
+        *
+        *   // Dapatkan data pengirim dan penerima dari Firestore
+        *   const db = admin.firestore();
+        *   const senderDoc = await db.collection("users").doc(senderUid).get();
+        *   const recipientDoc = await db.collection("users").doc(recipientUid).get();
+        *
+        *   if (!recipientDoc.exists || !senderDoc.exists) {
+        *     throw new functions.https.HttpsError("not-found", "Pengguna tidak ditemukan.");
+        *   }
+        *
+        *   const senderName = senderDoc.data().name || "Pasanganmu";
+        *   const recipientToken = recipientDoc.data().fcmToken;
+        *
+        *   if (!recipientToken) {
+        *     console.log("Penerima tidak memiliki FCM token.");
+        *     return { success: false, reason: "No FCM token" };
+        *   }
+        *
+        *   let title = "";
+        *   let body = "";
+        *
+        *   if (type === "encouragement") {
+        *     title = "Kamu dapat semangat baru! 🎉";
+        *     body = `${senderName} kasih semangat! Ayo lanjut minum 💧`;
+        *   } else if (type === "reminder") {
+        *     title = "Pengingat Minum 💧";
+        *     const current = data.partnerCurrent;
+        *     const target = data.partnerTarget;
+        *     body = `Hei, jangan lupa minum, progress kamu baru ${current.toFixed(2)}L dari target ${target.toFixed(1)}L.`;
+        *   } else {
+        *      return { success: false, reason: "Invalid type" };
+        *   }
+        *
+        *   const payload = {
+        *     notification: { title, body, icon: "/vite.svg" },
+        *     token: recipientToken,
+        *     webpush: { fcmOptions: { link: "/" } },
+        *   };
+        *
+        *   try {
+        *     await admin.messaging().send(payload);
+        *     console.log("Notifikasi berhasil dikirim.");
+        *     return { success: true };
+        *   } catch (error) {
+        *     console.error("Gagal mengirim notifikasi:", error);
+        *     throw new functions.https.HttpsError("internal", "Gagal mengirim notifikasi.");
+        *   }
+        * });
+        */
+
+        try {
+            const sendNotification = httpsCallable(functions, 'sendNotification');
+            await sendNotification({
+                recipientUid: partnerData.id,
+                type: type,
+                partnerCurrent: partnerData.current,
+                partnerTarget: partnerData.target,
+            });
+            alert('Notifikasi berhasil dikirim!');
+        } catch (error) {
+            console.error('Gagal mengirim notifikasi:', error);
+            alert('Gagal mengirim notifikasi. Pastikan Cloud Function sudah di-deploy dan Anda memiliki koneksi internet.');
+        }
+    }, []);
+
+
     return {
         currentUserData,
         partnerUserData,
@@ -137,5 +237,6 @@ export const useFirestoreWaterTracker = () => {
         resetWater,
         linkPartner,
         unlinkPartner,
+        sendNotificationToPartner,
     };
 };
