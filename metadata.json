@@ -1,0 +1,5 @@
+{
+  "name": "Pelacak Minum Air",
+  "description": "Aplikasi web sederhana untuk membantu Anda melacak asupan air harian Anda. Tetapkan target, catat setiap gelas, dan tetap terhidrasi dengan antarmuka yang modern dan minimalis.",
+  "requestFramePermissions": []
+}
